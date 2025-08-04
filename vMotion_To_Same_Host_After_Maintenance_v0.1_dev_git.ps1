@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 #Requires -RunAsAdministrator
 
 <#
@@ -13,7 +13,7 @@
 .CREATEDBY
     Juliano Alves de Brito Ribeiro (find me at julianoalvesbr@live.com or https://github.com/julianoabr or https://youtube.com/@powershellchannel)
 .VERSION INFO
-    0.1
+    0.2
 .VERSION NOTES
     
 .VERY IMPORTANT
@@ -21,29 +21,60 @@
     Se a Bíblia, que por muitos é considerada obsoleta e irrelevante, 
     nunca precisou ser atualizada quanto ao seu conteúdo original, 
     o que podemos dizer dos livros científicos de nossa ciência?” 
+.VERSION IMPROVEMENTS
+    Improvements for Next Version
+    * show the number of vms and clear host
+    * disable anti affinity rules
+    * put host in maintenance mode if drs is enabled
 
 #>
+
+Clear-Host
 
 #VALIDATE MODULE
 $moduleExists = Get-Module -Name Vmware.VimAutomation.Core
 
 if ($moduleExists){
     
-    Write-Output "The Module Vmware.VimAutomation.Core is already loaded"
+    Write-Host "VMware.VimAutomation.Core is already loaded." -ForegroundColor White -BackgroundColor DarkGreen
     
 }#if validate module
 else{
     
-    Import-Module -Name Vmware.VimAutomation.Core -WarningAction SilentlyContinue -ErrorAction Stop
+    Write-Host -NoNewline "VMware.VimAutomation.Core is not loaded." -ForegroundColor DarkBlue -BackgroundColor White
+    Write-Host -NoNewline "I need this module to work" -ForegroundColor DarkCyan -BackgroundColor White
+    
+    Import-Module -Name Vmware.VimAutomation.Core -WarningAction SilentlyContinue -ErrorAction Stop -Verbose
     
 }#else validate module
+
 
 function Pause-PSScript
 {
 
-   Read-Host 'Pressione [ENTER] para continuar' | Out-Null
+   Read-Host 'Press [ENTER] to continue' | Out-Null
 
 }
+
+
+function DisplayStart-Sleep ($totalSeconds)
+{
+
+$currentSecond = $totalSeconds
+
+while ($currentSecond -gt 0) {
+    
+    Write-Host "Script is running. Wait more $currentSecond seconds..." -ForegroundColor White -BackgroundColor DarkGreen
+    
+    Start-Sleep -Seconds 1 # Pause for 1 second
+    
+    $currentSecond--
+    }
+
+Write-Host "Countdown complete! Let's continue..." -ForegroundColor White -BackgroundColor DarkBlue
+
+}#end of Function Display Start-Sleep
+
 
 #VALIDATE IF OPTION IS NUMERIC
 function isNumeric ($x) {
@@ -52,9 +83,8 @@ function isNumeric ($x) {
     return $isNum
 } #end function is Numeric
 
-
 #FUNCTION CONNECT TO VCENTER
-function Connect-vCenterServer
+function Connect-ToVcenterServer
 {
     [CmdletBinding()]
     Param
@@ -63,27 +93,20 @@ function Connect-vCenterServer
         [Parameter(Mandatory=$true,
                    ValueFromPipelineByPropertyName=$true,
                    Position=0)]
-        [ValidateSet('Manual','Auto')]
-        $methodToConnect = 'Manual',
-
+        [ValidateSet('Menu','Automatic')]
+        $methodToConnect = 'Menu',
+               
         [Parameter(Mandatory=$true,
                    Position=1)]
-        [System.String[]]$vCenterServerList, 
+        [System.String[]]$VCServerList,
                 
         [Parameter(Mandatory=$false,
                    Position=2)]
-        [System.String]$dnsSuffix,
-        
+        [ValidateSet('subdomain.domain','subdomain2.domain','subdomain3.domain','subdomain4.domain')]
+        [System.String]$vCentersuffix,
+
         [Parameter(Mandatory=$false,
                    Position=3)]
-        [System.Boolean]$LastConnectedServers = $false,
-
-        [Parameter(Mandatory=$false,
-                   Position=4)]
-        [System.String]$connectionProtocol,
-
-        [Parameter(Mandatory=$false,
-                   Position=4)]
         [ValidateSet('80','443')]
         [System.String]$port = '443'
     )
@@ -91,80 +114,186 @@ function Connect-vCenterServer
 #VALIDATE IF YOU ARE CONNECTED TO ANY VCENTER 
 if ((Get-Datacenter) -eq $null)
     {
-        Write-Host "You are not connected to any vCenter" -ForegroundColor White -BackgroundColor DarkMagenta
-    }
+        Write-Host "You are not connected to any vCenter Server" -ForegroundColor White -BackgroundColor DarkMagenta
+    }#enf of IF
 else{
         
-        Write-Host "You are connected to some vCenter. I will disconnect you" -ForegroundColor White -BackgroundColor Red
+        $previousvCenterConnected = $global:DefaultVIServer.Name
+
+        Write-Host "You're connected to vCenter:$previousvCenterConnected" -ForegroundColor White -BackgroundColor Green
+        
+        Write-Host -NoNewline "I will disconnect you before continuing." -ForegroundColor White -BackgroundColor Red
             
         Disconnect-VIServer -Server * -Confirm:$false -Force -Verbose -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
 
 }#end of else validate if you are connected. 
+    
 
-
-if ($methodToConnect -eq 'Automatic'){
+    if ($methodToConnect -eq 'Automatic'){
+                
+        $Script:workingServer = $vCenterList + '.' + $vCentersuffix
         
-    foreach ($vCenterServer in $vCenterServerList){
-            
-        $Script:workingServer = ""
-        
-        $Script:workingServer = $vCenterServer + '.' + $suffix
-
         $vcInfo = Connect-VIServer -Server $Script:WorkingServer -Port $Port -WarningAction Continue -ErrorAction Stop
+    
+    }#end of If Method to Connect
+    else{
+        
+        $workingLocationNum = ""
+        
+        $tmpWorkingLocationNum = ""
+        
+        $Script:WorkingServer = ""
+        
+        $i = 0
 
-   }#end of foreach vcenter list
-       
-}#end of If Method to Connect
-else{
-        
-    $workingLocationNum = ""
-        
-    $tmpWorkingLocationNum = ""
-        
-    $Script:WorkingServer = ""
-        
-    $iterator = 0
-
-    #MENU SELECT VCENTER
-    foreach ($vCenterServer in $vCenterServerList){
+        #MENU SELECT VCENTER
+        foreach ($vcServer in $vcServerList){
 	   
-        $vcServerValue = $vCenterServer
+                $vcServerValue = $vcServer
 	    
-        Write-Output "            [$iterator].- $vcServerValue ";	
-	            
-        $iterator++	
-                
-        }#end foreach	
-                
-            Write-Output "            [$iterator].- Exit this script ";
+                Write-Output "            [$i].- $vcServerValue ";	
+	            $i++	
+                }#end foreach	
+                Write-Output "            [$i].- Exit this script ";
 
-            while(!(isNumeric($tmpWorkingLocationNum)) ){
-	                
-                $tmpWorkingLocationNum = Read-Host "Type the number of vCenter that you want to connect to"
-                
-            }#end of while
+                while(!(isNumeric($tmpWorkingLocationNum)) ){
+	                $tmpWorkingLocationNum = Read-Host "Type vCenter Number that you want to connect to"
+                }#end of while
 
-                $workingLocationNum = ($tmpWorkingLocationNum / 1)
+                    $workingLocationNum = ($tmpWorkingLocationNum / 1)
 
-                if(($WorkingLocationNum -ge 0) -and ($WorkingLocationNum -le ($iterator-1))  ){
-	                
-                    $Script:WorkingServer = $vCenterServerList[$WorkingLocationNum]
-                
-                }#end of IF
+                if(($WorkingLocationNum -ge 0) -and ($WorkingLocationNum -le ($i-1))  ){
+	                $Script:WorkingServer = $vcServerList[$WorkingLocationNum]
+                }
                 else{
             
-                    Write-Host "Exit selected, or Invalid choice number. End of Script." -ForegroundColor Red -BackgroundColor White
+                    Write-Host "Exit selected, or Invalid choice number. End of Script " -ForegroundColor Red -BackgroundColor White
             
                     Exit;
                 }#end of else
 
         #Connect to Vcenter
-        $Script:vcInfo = Connect-VIServer -Server $Script:WorkingServer -Port $port -WarningAction Continue -ErrorAction Stop -Verbose
+        $Script:vcInfo = Connect-VIServer -Server $Script:WorkingServer -Port $port -WarningAction Continue -ErrorAction Continue
   
     
     }#end of Else Method to Connect
 
-}#End of Function Connect to vCenter
+}#End of Function Connect to Vcenter
+
+function Generate-ClusterList{
+
+Write-Host "SELECT THE VCENTER CLUSTER THAT YOU WANT TO WORK" -ForegroundColor DarkBlue -BackgroundColor White
+
+Write-Output "`n"
+
+#CREATE CLUSTER LIST
+    $vCClusterList = @()
+        
+    $vCClusterList = (VMware.VimAutomation.Core\Get-Cluster | Select-Object -ExpandProperty Name| Sort-Object)
+
+    $tmpWorkingClusterNum = ""
+        
+    $Script:WorkingCluster = ""
+        
+    $counter = 0
+        
+    #CREATE CLUSTER MENU LIST
+    foreach ($vCCluster in $vCClusterList){
+	   
+        $vCClusterValue = $vCCluster
+	    
+        Write-Output "            [$counter].- $vCClusterValue ";	
+	    
+        $counter++	
+        
+     }#end foreach	
+        
+     Write-Output "            [$counter].- Exit this script ";
+
+     while(!(isNumeric($tmpWorkingClusterNum)) ){
+	    
+        $tmpWorkingClusterNum = Read-Host "Type the Vcenter Cluster Number that you select a Host to work"
+        
+     }#end of while
+
+     $workingClusterNum = ($tmpWorkingClusterNum / 1)
+
+     if(($workingClusterNum -ge 0) -and ($workingClusterNum -le ($counter-1))  ){
+	        
+        $Script:WorkingCluster = $vCClusterList[$workingClusterNum]
+      
+      }
+      else{
+            
+        Write-Host "Exit selected, or Invalid choice number. End of Script " -ForegroundColor Red -BackgroundColor White
+            
+        Exit;
+      }#end of else
+    
+}#end of Function generate Cluster List
+
+function Generate-HostList{
+ [CmdletBinding()]
+    Param
+    (
+        # Param1 help description
+        [Parameter(Mandatory=$true,
+                   ValueFromPipelineByPropertyName=$true,
+                   Position=0)]
+        [System.String]$privWorkingCluster
+      
+    )
+
+Write-Host "SELECT THE HOST THAT YOU WANT TO WORK" -ForegroundColor DarkBlue -BackgroundColor White
+
+Write-Output "`n"
+
+#CREATE CLUSTER LIST
+        $esxiHostList = @()
+        
+        $esxiHostList = (VMware.VimAutomation.Core\Get-Cluster -Name $privWorkingCluster | Get-VMHost | Select-Object -ExpandProperty Name | Sort-Object)
+
+        $tmpWorkingHostNum = ""
+        
+        $Script:WorkingHost = ""
+        
+        $esxicounter = 0
+        
+        #CREATE CLUSTER MENU LIST
+        foreach ($esxiHost in $esxiHostList){
+	   
+            $esxiHostValue = $esxiHost
+	    
+        Write-Output "            [$esxicounter].- $esxiHostValue ";	
+	    
+        $esxicounter++	
+        
+        }#end foreach	
+        
+        Write-Output "            [$esxicounter].- Exit this script ";
+
+        while(!(isNumeric($tmpWorkingHostNum)) ){
+	    
+            $tmpWorkingHostNum = Read-Host "Type the Host Number that you want to move the VMs"
+        
+        }#end of while
+
+            $workingHostNum = ($tmpWorkingHostNum / 1)
+
+        if(($workingHostNum -ge 0) -and ($workingHostNum -le ($esxicounter-1))  ){
+	        
+            $Script:WorkingHost = $esxiHostList[$workingHostNum]
+        }
+        else{
+            
+            Write-Host "Exit selected, or Invalid choice number. End of Script " -ForegroundColor Red -BackgroundColor White
+            
+            Exit;
+        }#end of else
+        
+        Write-Host "You chooose: $script:workingHost to work" -ForegroundColor White -BackgroundColor DarkBlue
+
+}#end of Function generate Cluster List
 
 ##############################################################
 #MAIN SCRIPT
@@ -173,18 +302,18 @@ else{
 $vcServerList = @();
 
 #ADD OR REMOVE VCs        
-$vcServerList = ('server1','server2','server3','server4','server5','server6') | Sort-Object
+$tmpVCServerList = ('server1','server2','server3','server4','server5') | Sort-Object
 
 #SELECT TYPE OF CONNECTIONS
 Do
 {
  
- $tmpMethodToConnect = Read-Host -Prompt "Type (Manual) if you want to choose vCenter to Connect. 
- Type (Automatic) if you want to Type the Name of vCenter to Connect"
+ $tmpMethodToConnect = Read-Host -Prompt "Type (menu) if you want to choose vCenter to Connect from a Menu. 
+ Type (automatic) if you want to Type the vCenter Name to Connect"
 
-    if ($tmpMethodToConnect -notmatch "^(?:manual\b|automatic\b)"){
+    if ($tmpMethodToConnect -notmatch "^(?:menu\b|automatic\b)"){
     
-        Write-Host "You typed an invalid word. Type only (manual) or (automatic)" -ForegroundColor White -BackgroundColor Red
+        Write-Host "You typed an invalid word. Type only (menu) or (automatic)" -ForegroundColor White -BackgroundColor Red
     
     }
     else{
@@ -193,52 +322,60 @@ Do
     
     }
     
-}While ($tmpMethodToConnect -notmatch "^(?:manual\b|automatic\b)")#end of while choose method to connect
+}While ($tmpMethodToConnect -notmatch "^(?:menu\b|automatic\b)")#end of while choose method to connect
 
 
 if ($tmpMethodToConnect -match "^\bautomatic\b$"){
 
     [System.String]$tmpVC = Read-Host "Write the name of vCenter that you want to connect"
 
-    $tmpSuffix = ""
+    $tmpDNSSuffix = ""
 
-    [System.String]$tmpSuffix = Read-Host "If necessary type DNS Suffix of vCenter that you want to connect"
+    [System.String]$tmpDNSSuffix = Read-Host "If necessary type DNS Suffix of vCenter that you want to connect"
 
-    if ($tmpSuffix -like $null){
+    if ($tmpDNSSuffix -like $null){
         
-        Connect-vCenterServer -vCenterServerList $tmpVC -methodToConnect Auto -port 443 -Verbose
+        Connect-ToVcenterServer -VCServerList $tmpVC -methodToConnect Automatic -port 443 -Verbose
+              
             
     }#end of IF
     else{
     
-        Connect-vCenterServer -vCenterServerList $tmpVC -methodToConnect Auto -dnsSuffix $tmpSuffix -port 443 -Verbose
+        Connect-ToVcenterServer -VCServerList $tmpVC -methodToConnect Automatic -vCentersuffix $tmpDNSSuffix -port 443 -Verbose
     
     }#end of Else
     
 
 }#end of IF
 else{
-
-    Connect-vCenterServer -vCenterServerList $vcServerList -methodToConnect Manual -port 443 -Verbose
-
+    
+    Connect-ToVcenterServer -VCServerList $tmpVCServerList -methodToConnect Menu -port 443 -Verbose
+    
 }#end of Else
 
+#call function to choose cluster
+Generate-ClusterList
 
-[System.String]$esxiHostName = Read-Host -Prompt "Type the HostName that you want to get All VMs that are run on it"
+#call function to choose Host
+Generate-HostList -privWorkingCluster $script:WorkingCluster
 
 
-$hostObj = Get-VMHost -Name $esxiHostName
+$hostObj = Get-VMHost -Name $Script:workingHost
 
 $vmSourceList = @()
 
-$vmSourceList = $hostObj | get-vm | Select-Object -ExpandProperty Name | Sort-Object
-
-$vmSourceList
+$vmSourceList = $hostObj | Get-VM | Where-Object -FilterScript {$PSItem.Name -notlike 'VCLS*'} | Select-Object -ExpandProperty Name | Sort-Object
 
 [System.Int32]$countVM = $vmSourceList.Count
 
+Write-Host "I found: $countVM VMS in Host $script:WorkingHost" -ForegroundColor White -BackgroundColor DarkBlue
+
+Write-Host "I found the following VMs in Host $script:WorkingHost" -ForegroundColor White -BackgroundColor DarkBlue
+
+$vmSourceList
+
 #FOR TEST PURPOSE ONLY
-#$sourceVM = 'testVM'
+#$sourceVM = 'test-vm'
 
 Pause-PSScript
 
@@ -251,7 +388,7 @@ foreach ($sourceVM in $vmSourceList)
 
     $vmObj = Get-VM -Name $sourceVM -Verbose
 
-    $hostDestinationObj = Get-VMHost -Name $esxiHostName -Verbose
+    $hostDestinationObj = Get-VMHost -Name $script:WorkingHost -Verbose
 
     Write-Progress -Activity "vMotion Progress" -PercentComplete (($counterVM*100)/$countVM) -Status "$(([math]::Round((($counterVM)/$countVM * 100),0))) %"
 
